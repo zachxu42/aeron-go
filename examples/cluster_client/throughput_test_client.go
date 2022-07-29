@@ -36,7 +36,7 @@ func (ctx *TestContext) OnMessage(cluster *client.AeronCluster, timestamp int64,
 	buffer *atomic.Buffer, offset int32, length int32, header *logbuffer.Header) {
 	recvTime := time.Now().UnixNano()
 	msgNo := buffer.GetInt32(offset)
-	sendTime := buffer.GetInt64(offset + 8)
+	sendTime := buffer.GetInt64(offset + 4)
 	latency := recvTime - sendTime
 	if msgNo < 1 || int(msgNo) > len(ctx.latencies) {
 		fmt.Printf("OnMessage - sessionId=%d timestamp=%d pos=%d length=%d latency=%d\n",
@@ -77,12 +77,18 @@ func main() {
 	if idleStr := os.Getenv("NO_OP_IDLE"); idleStr != "" {
 		opts.IdleStrategy = &idlestrategy.Busy{}
 	}
+	// Go cluster
 	opts.IngressChannel = "aeron:udp?alias=cluster-client-ingress|endpoint=localhost:20000"
 	opts.IngressEndpoints = "0=localhost:20000,1=localhost:21000,2=localhost:22000"
 	//opts.EgressChannel = "aeron:udp?alias=cluster-egress|endpoint=localhost:11111"
 
+	// Java cluster
+	//opts.IngressChannel = "aeron:udp"
+	//opts.IngressEndpoints = "0=localhost:9002"
+	//opts.EgressChannel = "aeron:udp?endpoint=localhost:0"
+
 	listener := &TestContext{
-		latencies: make([]int64, 1000),
+		latencies: make([]int64, 10),
 	}
 	clusterClient, err := client.NewAeronCluster(ctx, opts, listener)
 	if err != nil {
@@ -93,7 +99,7 @@ func main() {
 		opts.IdleStrategy.Idle(clusterClient.Poll())
 	}
 
-	sendBuf := atomic.MakeBuffer(make([]byte, 100))
+	sendBuf := atomic.MakeBuffer(make([]byte, 12))
 	for round := 1; round <= 10; round++ {
 		fmt.Printf("starting round #%d\n", round)
 		listener.messageCount = 0
@@ -106,7 +112,7 @@ func main() {
 		ct := len(latencies)
 		for i := 1; i <= ct; i++ {
 			sendBuf.PutInt32(0, int32(i))
-			sendBuf.PutInt64(8, time.Now().UnixNano())
+			sendBuf.PutInt64(4, time.Now().UnixNano())
 			for {
 				if r := clusterClient.Offer(sendBuf, 0, sendBuf.Capacity()); r >= 0 {
 					sentCt++
