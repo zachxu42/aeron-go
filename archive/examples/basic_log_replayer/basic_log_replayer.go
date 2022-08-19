@@ -26,6 +26,7 @@ import (
 	"github.com/corymonroe-coinbase/aeron-go/archive"
 	"github.com/corymonroe-coinbase/aeron-go/archive/examples"
 	"math"
+	"sort"
 	"time"
 )
 
@@ -74,7 +75,7 @@ func main() {
 		logger.Fatalf(err.Error())
 	}
 
-	idleStrategy := idlestrategy.Sleeping{SleepFor: time.Millisecond * 1}
+	idleStrategy := &idlestrategy.Busy{}
 
 	recordingStopPosition, err := arch.GetStopPosition(logRecordingId)
 	if err != nil {
@@ -102,11 +103,37 @@ func main() {
 	defer subscription.Close()
 	logger.Infof("Subscription found %v", subscription)
 
+	latencies := make([]int64, 0)
+
+	roundSize := 100000
+	roundNo := 1
+	roundStartTime := time.Now()
 	printHandler := func(buffer *atomic.Buffer, offset int32, length int32, header *logbuffer.Header) {
 		templateId := buffer.GetUInt16(offset + 2)
 		if templateId == 1 {
 			// Skip 32 bytes for Session Messages, which is templateId = 1
-			fmt.Println(buffer.GetBytesArray(offset+session_header_length, length-session_header_length))
+			//fmt.Println(buffer.GetBytesArray(offset+session_header_length, length-session_header_length))
+			offset += session_header_length
+			recvTime := time.Now().UnixNano()
+			_ = buffer.GetInt32(offset)
+			sendTime := buffer.GetInt64(offset + 4)
+			latencies = append(latencies, recvTime-sendTime)
+			if len(latencies) > roundSize {
+				fmt.Printf("finished round %d. ", roundNo)
+				throughput := float64(roundSize) / time.Since(roundStartTime).Seconds()
+				if recvTime-sendTime < time.Minute.Nanoseconds() {
+					sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
+					fmt.Printf("count=%d min=%d 10%%=%d 50%%=%d 90%%=%d max=%d throughput=%.2f\n",
+						roundSize, latencies[0]/1000, latencies[roundSize/10]/1000, latencies[roundSize/2]/1000, latencies[9*(roundSize/10)]/1000,
+						latencies[roundSize-1]/1000, throughput)
+				} else {
+					fmt.Printf("count=%d, throughput=%.2f, last_msg_sent_time=%s.\n", roundSize, throughput, time.UnixMilli(sendTime/1000000).String())
+				}
+
+				roundNo++
+				roundStartTime = time.Now()
+				latencies = make([]int64, 0)
+			}
 		}
 	}
 
