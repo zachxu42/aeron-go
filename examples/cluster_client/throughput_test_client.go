@@ -36,8 +36,13 @@ func (ctx *TestContext) OnMessage(cluster *client.AeronCluster, timestamp int64,
 	buffer *atomic.Buffer, offset int32, length int32, header *logbuffer.Header) {
 	recvTime := time.Now().UnixNano()
 	msgNo := buffer.GetInt32(offset)
-	sendTime := buffer.GetInt64(offset + 4)
+	sendTime := buffer.GetInt64(offset + 12)
 	latency := recvTime - sendTime
+	//fmt.Println(latency)
+	//
+	//if latency > time.Second.Nanoseconds() {
+	//	fmt.Printf("%s %s %s", time.Now().String(), time.UnixMilli(sendTime/1000000).String(), time.UnixMilli(recvTime/1000000).String())
+	//}
 	if msgNo < 1 || int(msgNo) > len(ctx.latencies) {
 		fmt.Printf("OnMessage - sessionId=%d timestamp=%d pos=%d length=%d latency=%d\n",
 			cluster.ClusterSessionId(), timestamp, header.Position(), length, latency)
@@ -89,11 +94,11 @@ func main() {
 		opts.IdleStrategy.Idle(clusterClient.Poll())
 	}
 
-	messageCount := 100000
+	messageCount := int32(10000)
 	messageSize := int32(256)
 	throttleInterval := 10 * time.Microsecond
 
-	sendBuf := atomic.MakeBuffer(make([]byte, messageSize+12))
+	sendBuf := atomic.MakeBuffer(make([]byte, messageSize+20))
 	padding := atomic.MakeBuffer(make([]byte, messageSize))
 	for round := 1; round <= 10; round++ {
 		fmt.Printf("starting round #%d\n", round)
@@ -107,8 +112,10 @@ func main() {
 		ct := len(latencies)
 		for i := 1; i <= ct; i++ {
 			sendBuf.PutInt32(0, int32(i))
-			sendBuf.PutInt64(4, time.Now().UnixNano())
-			sendBuf.PutBytes(12, padding, 0, messageSize)
+			sendBuf.PutInt32(4, messageCount)
+			sendBuf.PutInt32(8, int32(round))
+			sendBuf.PutInt64(12, time.Now().UnixNano())
+			sendBuf.PutBytes(20, padding, 0, messageSize)
 			for {
 				if r := clusterClient.Offer(sendBuf, 0, sendBuf.Capacity()); r >= 0 {
 					break
@@ -122,7 +129,7 @@ func main() {
 				listener.sendKeepAliveIfNecessary()
 			}
 		}
-		for listener.messageCount < messageCount {
+		for listener.messageCount < int(messageCount) {
 			pollCt := clusterClient.Poll()
 			if pollCt == 0 {
 				listener.sendKeepAliveIfNecessary()
@@ -133,7 +140,7 @@ func main() {
 		totalNs := now.UnixNano() - beginTime
 		sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
 		fmt.Printf("round #%d complete, count=%d min=%d 50%%=%d 90%%=%d 99%%=%d max=%d throughput=%.2f\n",
-			round, messageCount, latencies[ct-messageCount]/1000, latencies[ct/2]/1000, latencies[9*ct/10]/1000, latencies[99*(ct/100)]/1000,
+			round, messageCount, latencies[ct-int(messageCount)]/1000, latencies[ct/2]/1000, latencies[9*ct/10]/1000, latencies[99*(ct/100)]/1000,
 			latencies[ct-1]/1000, (float64(messageCount) * 1000000000.0 / float64(totalNs)))
 
 		for time.Since(now) < 2*time.Second {

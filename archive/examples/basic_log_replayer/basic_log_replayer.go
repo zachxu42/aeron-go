@@ -105,9 +105,7 @@ func main() {
 
 	latencies := make([]int64, 0)
 
-	roundSize := 100000
-	roundNo := 1
-	roundStartTime := time.Now()
+	var roundStartTime time.Time
 	printHandler := func(buffer *atomic.Buffer, offset int32, length int32, header *logbuffer.Header) {
 		templateId := buffer.GetUInt16(offset + 2)
 		if templateId == 1 {
@@ -115,30 +113,39 @@ func main() {
 			//fmt.Println(buffer.GetBytesArray(offset+session_header_length, length-session_header_length))
 			offset += session_header_length
 			recvTime := time.Now().UnixNano()
-			_ = buffer.GetInt32(offset)
-			sendTime := buffer.GetInt64(offset + 4)
+			msgNo := buffer.GetInt32(offset)
+			roundSize := buffer.GetInt32(offset + 4)
+			roundNo := buffer.GetInt32(offset + 8)
+			sendTime := buffer.GetInt64(offset + 12)
+			//if recvTime-sendTime > 5*time.Second.Nanoseconds() && recvTime-sendTime < time.Minute.Nanoseconds() {
+			//	fmt.Printf("latency > 5s, message number %d\n", msgNo)
+			//}
+
+			if msgNo == 1 {
+				fmt.Printf("Starting round %d. ", roundNo)
+				latencies = make([]int64, 0)
+				roundStartTime = time.Now()
+			}
 			latencies = append(latencies, recvTime-sendTime)
-			if len(latencies) > roundSize {
+
+			if msgNo == roundSize {
 				fmt.Printf("finished round %d. ", roundNo)
 				throughput := float64(roundSize) / time.Since(roundStartTime).Seconds()
+
 				if recvTime-sendTime < time.Minute.Nanoseconds() {
 					sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
-					fmt.Printf("count=%d min=%d 10%%=%d 50%%=%d 90%%=%d max=%d throughput=%.2f\n",
-						roundSize, latencies[0]/1000, latencies[roundSize/10]/1000, latencies[roundSize/2]/1000, latencies[9*(roundSize/10)]/1000,
+					fmt.Printf("round %d count=%d min=%d 50%%=%d 90%%=%d 99%%=%d max=%d throughput=%.2f\n",
+						roundNo, roundSize, latencies[0]/1000, latencies[roundSize/2]/1000, latencies[9*(roundSize/10)]/1000, latencies[99*roundSize/100]/1000,
 						latencies[roundSize-1]/1000, throughput)
 				} else {
-					fmt.Printf("count=%d, throughput=%.2f, last_msg_sent_time=%s.\n", roundSize, throughput, time.UnixMilli(sendTime/1000000).String())
+					fmt.Printf("round %d count=%d, throughput=%.2f, last_msg_sent_time=%s.\n", roundNo, roundSize, throughput, time.UnixMilli(sendTime/1000000).String())
 				}
-
-				roundNo++
-				roundStartTime = time.Now()
-				latencies = make([]int64, 0)
 			}
 		}
 	}
 
 	for {
-		fragmentsRead := subscription.Poll(printHandler, 10)
+		fragmentsRead := subscription.Poll(printHandler, 1)
 		arch.RecordingEventsPoll()
 		idleStrategy.Idle(fragmentsRead)
 	}
